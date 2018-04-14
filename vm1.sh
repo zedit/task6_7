@@ -25,5 +25,12 @@ function conf_int_iface() {
   fi
 }
 
-conf_int_iface
+function conf_vlan() {
+  apt-get install -y vlan
+  vconfig add "${int_if}" "${VLAN}"
+  ip addr add "${VLAN_IP}" dev "${int_if}.${VLAN}"
+  ip link set up "${int_if}.${VLAN}"
+}
 
+conf_int_iface
+conf_vlan
