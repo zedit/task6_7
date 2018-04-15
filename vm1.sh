@@ -2,10 +2,44 @@
 
 source vm1.config
 
-ext_if=${1:-$EXTERNAL_IF}
-int_if=${2:-$INTERNAL_IF}
-man_if=${3:-$MANAGEMENT_IF}
+ext_if_type=${1:-"static"}
+ext_if=${2:-$EXTERNAL_IF}
+int_if=${3:-$INTERNAL_IF}
 conf_net="/etc/network/interfaces"
+ssl_cert="/etc/ssl/certs/web.crt"
+ssl_cert_key="/etc/ssl/certs/web.key"
+root_cert="/etc/ssl/certs/root-ca.crt"
+root_cert_key="/etc/ssl/certs/root-ca.key"
+
+function conf_ext_iface() {
+  case ${ext_if_type} in 
+    static)
+      if ! cat "${conf_net}" | grep "${ext_if}" >> /dev/null; then
+        echo "auto ${ext_if}" >> "${conf_net}"
+        echo "iface ${ext_if} inet static" >> "${conf_net}"
+        if ! cat "${conf_net}" | grep "${EXT_IP}" >> /dev/null; then
+          echo "address ${EXT_IP}" >> "${conf_net}"
+          echo "gateway ${EXT_GW}" >> "${conf_net}"
+          ifup "${ext_if}"
+        else
+          echo "Address ${EXT_IP} already taken" 
+         fi
+        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+      else
+        echo "Interface ${ext_if} already configured"
+      fi
+    ;;    
+    dhcp) 
+      if ! cat "${conf_net}" | grep "${ext_if}" >> /dev/null; then
+        echo "auto ${ext_if}" >> "${conf_net}"
+        echo "iface ${ext_if} inet "${EXT_D_IP}"" >> "${conf_net}"
+        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+      else
+        echo "Interface ${ext_if} already configured"
+      fi
+    ;;
+  esac
+}
 
 function conf_int_iface() {
   if ! cat "${conf_net}" | grep "${int_if}" >> /dev/null; then
@@ -25,5 +59,57 @@ function conf_int_iface() {
   fi
 }
 
-conf_int_iface
+function conf_vlan() {
+  check_vlan_inst=$(apt-cache policy vlan | grep Installed | awk -F ': ' '{print $2}')
+  if [ "${check_vlan_inst}" == "(none)" ]; then
+    apt-get update
+    apt-get install -y vlan
+  fi 
+  vconfig add "${int_if}" "${VLAN}"
+  ip addr add "${VLAN_IP}" dev "${int_if}.${VLAN}"
+  ip link set up "${int_if}.${VLAN}"
+}
 
+function get_ssl_certs() {
+  openssl genrsa -out "${root_cert_key}" 4096
+  openssl req -x509 -new -nodes -key "${root_cert_key}" -sha256 -days 10000 -out "${root_cert}" -subj "/C=UA/ST=Kharkov/L=Kharkov/O=homework/OU=task6_7/CN=root_cert"
+  openssl genrsa -out "${ssl_cert_key}" 2048
+  openssl req -new -out /etc/ssl/certs/web.csr -key "${ssl_cert_key}" -subj "/C=UA/ST=Kharkov/L=Kharkov/O=homework/OU=task6_7/CN=$(hostname)/"
+  openssl x509 -req -in /etc/ssl/certs/web.csr -CA "${root_cert}" -CAkey "${root_cert_key}" -CAcreateserial -out "${ssl_cert}"
+  cat "${ssl_cert}" "${root_cert}" > /etc/ssl/certs/web-ca-chain.pem
+}
+
+function nginx_conf() {
+  check_nginx_inst=$(apt-cache policy nginx | grep Installed | awk -F ': ' '{print $2}')
+  if [ "${check_nginx_inst}" == "(none)" ]; then
+    apt-get update 
+    apt-get install -y nginx
+  fi
+cat << EOF > /etc/nginx/sites-available/example.com 
+server {
+    listen ${NGINX_PORT};
+    listen 443 ssl;
+    server_name 10.0.0.2;
+
+    ssl on;
+    ssl_certificate         ${ssl_cert};
+    ssl_certificate_key     ${ssl_cert_key};
+    ssl_trusted_certificate ${root_cert};
+
+    location / {
+        proxy_pass http://10.0.0.2;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+  ln -s /etc/nginx/sites-available/example.com /etc/nginx/sites-enabled/example.com
+}
+
+conf_ext_iface
+conf_int_iface
+conf_vlan
+get_ssl_certs
+nginx_conf
