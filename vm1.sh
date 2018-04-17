@@ -2,9 +2,8 @@
 
 source vm1.config
 
-ext_if_type=${1:-"static"}
-ext_if=${2:-$EXTERNAL_IF}
-int_if=${3:-$INTERNAL_IF}
+ext_if=${1:-$EXTERNAL_IF}
+int_if=${2:-$INTERNAL_IF}
 conf_net="/etc/network/interfaces"
 ssl_cert="/etc/ssl/certs/web.crt"
 ssl_cert_key="/etc/ssl/certs/web.key"
@@ -12,51 +11,31 @@ root_cert="/etc/ssl/certs/root-ca.crt"
 root_cert_key="/etc/ssl/certs/root-ca.key"
 
 function conf_ext_iface() {
-  case ${ext_if_type} in 
-    static)
-      if ! cat "${conf_net}" | grep "${ext_if}" >> /dev/null; then
-        echo "auto ${ext_if}" >> "${conf_net}"
-        echo "iface ${ext_if} inet static" >> "${conf_net}"
-        if ! cat "${conf_net}" | grep "${EXT_IP}" >> /dev/null; then
-          echo "address ${EXT_IP}" >> "${conf_net}"
-          echo "gateway ${EXT_GW}" >> "${conf_net}"
-          ifup "${ext_if}"
-        else
-          echo "Address ${EXT_IP} already taken" 
-         fi
-        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-      else
-        echo "Interface ${ext_if} already configured"
-      fi
-    ;;    
-    dhcp) 
-      if ! cat "${conf_net}" | grep "${ext_if}" >> /dev/null; then
-        echo "auto ${ext_if}" >> "${conf_net}"
-        echo "iface ${ext_if} inet "${EXT_D_IP}"" >> "${conf_net}"
-        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-      else
-        echo "Interface ${ext_if} already configured"
-      fi
-    ;;
-  esac
+  if [ "${EXT_IP}" == "dhcp" ]; then  
+    echo "auto ${ext_if}" >> "${conf_net}"
+    echo "iface ${ext_if} inet "${EXT_IP}"" >> "${conf_net}"
+    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+    systemctl restart networking.service
+  else
+    echo "auto ${ext_if}" >> "${conf_net}"
+    echo "iface ${ext_if} inet static" >> "${conf_net}"
+    echo "address ${EXT_IP}" >> "${conf_net}"
+    echo "gateway ${EXT_GW}" >> "${conf_net}"
+    ifup "${ext_if}"
+    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+    systemctl restart networking.service
+  fi
 }
 
 function conf_int_iface() {
-  if ! cat "${conf_net}" | grep "${int_if}" >> /dev/null; then
-    echo "auto ${int_if}" >> "${conf_net}"
-    echo "iface ${int_if} inet static" >> "${conf_net}"
-    if ! cat "${conf_net}" | grep "${INT_IP}" >> /dev/null; then
-      echo "address ${INT_IP}" >> "${conf_net}"
-      ifup "${int_if}"
-    else
-      echo "Address ${INT_IP} already taken" 
-    fi
-    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-    iptables -t nat -A POSTROUTING -s ${INT_IP} ! -d ${INT_IP} -j MASQUERADE
-    sysctl -w net.ipv4.ip_forward=1
-  else
-    echo "Interface ${int_if} already configured"
-  fi
+  echo "auto ${int_if}" >> "${conf_net}"
+  echo "iface ${int_if} inet static" >> "${conf_net}"
+  echo "address ${INT_IP}" >> "${conf_net}"
+  ifup "${int_if}"
+  echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+  iptables -t nat -A POSTROUTING -s ${INT_IP} ! -d ${INT_IP} -j MASQUERADE
+  sysctl -w net.ipv4.ip_forward=1
+  systemctl restart networking.service
 }
 
 function conf_vlan() {
@@ -65,6 +44,8 @@ function conf_vlan() {
     apt-get update
     apt-get install -y vlan
   fi 
+  apt-get install -y vlan
+  modprobe 8021q
   vconfig add "${int_if}" "${VLAN}"
   ip addr add "${VLAN_IP}" dev "${int_if}.${VLAN}"
   ip link set up "${int_if}.${VLAN}"
@@ -79,7 +60,7 @@ function get_ssl_certs() {
   cat "${ssl_cert}" "${root_cert}" > /etc/ssl/certs/web-ca-chain.pem
 }
 
-function nginx_conf() {
+function conf_nginx() {
   check_nginx_inst=$(apt-cache policy nginx | grep Installed | awk -F ': ' '{print $2}')
   if [ "${check_nginx_inst}" == "(none)" ]; then
     apt-get update 
@@ -87,9 +68,8 @@ function nginx_conf() {
   fi
 cat << EOF > /etc/nginx/sites-available/example.com 
 server {
-    listen ${NGINX_PORT};
-    listen 443 ssl;
-    server_name 10.0.0.2;
+    listen ${NGINX_PORT} ssl;
+    server_name vm2;
 
     ssl on;
     ssl_certificate         ${ssl_cert};
@@ -97,7 +77,7 @@ server {
     ssl_trusted_certificate ${root_cert};
 
     location / {
-        proxy_pass http://10.0.0.2;
+        proxy_pass http://${APACHE_VLAN}/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -105,11 +85,11 @@ server {
     }
 }
 EOF
-  ln -s /etc/nginx/sites-available/example.com /etc/nginx/sites-enabled/example.com
+  ln -s /etc/nginx/sites-available/vm1 /etc/nginx/sites-enabled/vm1
 }
 
 conf_ext_iface
 conf_int_iface
 conf_vlan
 get_ssl_certs
-nginx_conf
+conf_nginx
