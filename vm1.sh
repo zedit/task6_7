@@ -66,7 +66,7 @@ function conf_nginx() {
     apt-get update 
     apt-get install -y nginx
   fi
-cat << EOF > /etc/nginx/sites-available/example.com 
+cat << EOF > /etc/nginx/sites-available/vm1 
 server {
     listen ${NGINX_PORT} ssl;
     server_name vm2;
@@ -77,7 +77,7 @@ server {
     ssl_trusted_certificate ${root_cert};
 
     location / {
-        proxy_pass http://${APACHE_VLAN}/;
+        proxy_pass http://${APACHE_VLAN_IP}/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;

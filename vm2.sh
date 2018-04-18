@@ -33,6 +33,7 @@ function conf_apache() {
     apt-get update
     apt-get install -y apache2
   fi
+  service apache2 start
   apache_vlan=$(echo ${APACHE_VLAN_IP} | awk -F'/' '{print $1}')
   sed -i "s/80/${apache_vlan}:80/" /etc/apache2/ports.conf
   service apache2 restart
