@@ -9,6 +9,8 @@ ssl_cert="/etc/ssl/certs/web.crt"
 ssl_cert_key="/etc/ssl/certs/web.key"
 root_cert="/etc/ssl/certs/root-ca.crt"
 root_cert_key="/etc/ssl/certs/root-ca.key"
+ssl_cert_chain="/etc/ssl/certs/web-ca-chain.pem"
+hn=$(hostname)
 
 function conf_ext_iface() {
   if [ "${EXT_IP}" == "dhcp" ]; then  
@@ -39,7 +41,7 @@ function conf_int_iface() {
 }
 
 function conf_vlan() {
-  check_vlan_inst=$(apt-cache policy vlan | grep Installed | awk -F ': ' '{print $2}')
+  local check_vlan_inst=$(apt-cache policy vlan | grep Installed | awk -F ': ' '{print $2}')
   if [ "${check_vlan_inst}" == "(none)" ]; then
     apt-get update
     apt-get install -y vlan
@@ -52,40 +54,49 @@ function conf_vlan() {
 }
 
 function get_ssl_certs() {
+  local ext_if_ip=$(ip -br a | grep --max-count=1 ${ext_if} | awk -F ' ' '{print $3}' | awk -F '/' '{print $1}')
+  local ssl_conf="/etc/ssl/opensll_san.cnf"
+  local ssl_csr="/etc/ssl/certs/web.csr"
+cat << EOF > ${ssl_conf}
+[ v3_req ]
+basicConstraints            = CA:FALSE
+keyUsage                    = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName              = @alt_names
+ 
+[alt_names]
+IP.1   = ${ext_if_ip}
+DNS.1   = ${hn}
+EOF
   openssl genrsa -out "${root_cert_key}" 4096
   openssl req -x509 -new -nodes -key "${root_cert_key}" -sha256 -days 10000 -out "${root_cert}" -subj "/C=UA/ST=Kharkov/L=Kharkov/O=homework/OU=task6_7/CN=root_cert"
   openssl genrsa -out "${ssl_cert_key}" 2048
-  openssl req -new -out /etc/ssl/certs/web.csr -key "${ssl_cert_key}" -subj "/C=UA/ST=Kharkov/L=Kharkov/O=homework/OU=task6_7/CN=$(hostname)/"
-  openssl x509 -req -in /etc/ssl/certs/web.csr -CA "${root_cert}" -CAkey "${root_cert_key}" -CAcreateserial -out "${ssl_cert}"
-  cat "${ssl_cert}" "${root_cert}" > /etc/ssl/certs/web-ca-chain.pem
+  openssl req -new -out "${ssl_csr}" -key "${ssl_cert_key}" -subj "/C=UA/ST=Kharkov/L=Kharkov/O=homework/OU=task6_7/CN=${hn}/"
+  openssl x509 -req -in "${ssl_csr}" -CA "${root_cert}" -CAkey "${root_cert_key}" -CAcreateserial -out "${ssl_cert}" -extensions v3_req -extfile "${ssl_conf}"
+  cat "${ssl_cert}" "${root_cert}" > ${ssl_cert_chain}
 }
 
 function conf_nginx() {
-  check_nginx_inst=$(apt-cache policy nginx | grep Installed | awk -F ': ' '{print $2}')
+  local check_nginx_inst=$(apt-cache policy nginx | grep Installed | awk -F ': ' '{print $2}')
   if [ "${check_nginx_inst}" == "(none)" ]; then
     apt-get update 
     apt-get install -y nginx
   fi
-cat << EOF > /etc/nginx/sites-available/vm1 
+cat << EOF > /etc/nginx/sites-available/${hn} 
 server {
     listen ${NGINX_PORT} ssl;
-    server_name vm2;
+    server_name ${hn};
 
     ssl on;
-    ssl_certificate         ${ssl_cert};
+    ssl_certificate         ${ssl_cert_chain};
     ssl_certificate_key     ${ssl_cert_key};
-    ssl_trusted_certificate ${root_cert};
 
     location / {
         proxy_pass http://${APACHE_VLAN_IP}/;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
 EOF
-  ln -s /etc/nginx/sites-available/vm1 /etc/nginx/sites-enabled/vm1
+  ln -s /etc/nginx/sites-available/${hn} /etc/nginx/sites-enabled/${hn}
+  service nginx restart
 }
 
 conf_ext_iface
