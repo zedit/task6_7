@@ -16,7 +16,7 @@ function conf_ext_iface() {
 }
 
 function conf_vlan() {
-  check_vlan_inst=$(apt-cache policy vlan | grep Installed | awk -F ': ' '{print $2}')
+  local check_vlan_inst=$(apt-cache policy vlan | grep Installed | awk -F ': ' '{print $2}')
   if [ "${check_vlan_inst}" == "(none)" ]; then
     apt-get update
     apt-get install -y vlan
@@ -28,13 +28,13 @@ function conf_vlan() {
 }
 
 function conf_apache() {
-  check_apache_inst=$(apt-cache policy apache2 | grep Installed | awk -F ': ' '{print $2}')
+  local check_apache_inst=$(apt-cache policy apache2 | grep Installed | awk -F ': ' '{print $2}')
+  local apache_vlan=$(echo ${APACHE_VLAN_IP} | awk -F'/' '{print $1}')
   if [ "${check_apache_inst}" == "(none)" ]; then
     apt-get update
     apt-get install -y apache2
   fi
   service apache2 start
-  apache_vlan=$(echo ${APACHE_VLAN_IP} | awk -F'/' '{print $1}')
   sed -i "s/80/${apache_vlan}:80/" /etc/apache2/ports.conf
   service apache2 restart
 }
